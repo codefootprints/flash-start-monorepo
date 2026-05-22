@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+	--color-olive-50: #f4f5f0;
+	--color-olive-100: #e4e7d5;
+	--color-olive-200: #ccd3af;
+	--color-olive-300: #a9b67f;
+	--color-olive-400: #889a57;
+	--color-olive-500: #6b8e23; /* Olive Drab (warna hover kamu) */
+	--color-olive-600: #56721c;
+	--color-olive-700: #425718;
+	--color-olive-800: #556b2f; /* Dark Olive Green (warna utama kamu) */
+	--color-olive-900: #2d3a1a;
+	--color-olive-950: #181f0d;
+}
