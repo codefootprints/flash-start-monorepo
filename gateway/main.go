@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -9,9 +10,50 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/proxy"
+	"github.com/golang-jwt/jwt/v5"
 	gorilla "github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 )
+
+// MIDDLEWARE SECURITY GUARD (Task 10.1)
+func AuthGuard() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		// Ambil header Authorization (Format standar: Bearer <token>)
+		authHeader := c.Get("Authorization")
+		if authHeader == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Akses ditolak, token otentikasi tidak ditemukan",
+			})
+		}
+
+		// Potong teks "Bearer " untuk mengambil string token murninya
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokenString == authHeader { // Jika tidak ada kata Bearer
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Format token salah, harus menggunakan format 'Bearer <token>'",
+			})
+		}
+
+		// Validasi tanda tangan token menggunakan JWT_SECRET
+		token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+			// Pastikan metode signing yang digunakan adalah HMAC (HS256)
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("metode signing tidak didukung: %v", t.Header["alg"])
+			}
+			return []byte(os.Getenv("JWT_SECRET")), nil
+		})
+
+		// Jika token rusak, kedaluwarsa, atau tanda tangan tidak cocok
+		if err != nil || !token.Valid {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Sesi Anda telah berakhir atau token anda tidak valid, silakan login kembali",
+			})
+		}
+
+		// Jika token lolos verifikasi, izinkan request melaku ke handler proxy berikutnya
+		return c.Next()
+	}
+}
 
 func main() {
 	// Membaca file .env jika tersedia
@@ -100,9 +142,18 @@ func main() {
 		log.Println("🔌 Jalur koneksi WebSocket Proxy ditutup dengan aman")
 	}))
 
-	// 🚗 Reverse Proxy Route untuk START Service (HTTP REST)
-	// mengarahkan /api/v1/start/* ke http://localhost:3001/*
-	app.All("/api/v1/start/*", func(c *fiber.Ctx) error {
+	// 🚗 RUTE PROXY START SERVICE - JALUR BEBAS (Tanpa Login)
+	// Membuka akses untuk register dan login agar user bisa mendapatkan token awal
+	app.Post("/api/v1/start/register", func(c *fiber.Ctx) error {
+		return proxy.Do(c, startURL+"/register")
+	})
+	app.Post("/api/v1/start/login", func(c *fiber.Ctx) error {
+		return proxy.Do(c, startURL+"/login")
+	})
+
+	// 🔒 RUTE PROXY START SERVICE - JALUR AMAN (Diproteksi AuthGuard)
+	// Semua rute selain login/register harus membawa token valid melewati AuthGuard()
+	app.All("/api/v1/start/*", AuthGuard(), func(c *fiber.Ctx) error {
 		remainingPath := strings.TrimPrefix(c.Path(), "/api/v1/start")
 		targetURL := startURL + remainingPath
 
@@ -113,8 +164,7 @@ func main() {
 		return proxy.Do(c, targetURL)
 	})
 
-	// 🚗 Reverse Proxy Route untuk FLASH Service (HTTP REST)
-	// mengarahkan /api/v1/flash/* ke http://localhost:3000/*
+	// ⚡️ RUTE PROXY FLASH SERVICE (HTTP REST)
 	app.All("/api/v1/flash/*", func(c *fiber.Ctx) error {
 		remainingPath := strings.TrimPrefix(c.Path(), "/api/v1/flash")
 		targetURL := flashURL + remainingPath
