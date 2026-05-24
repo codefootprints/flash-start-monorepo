@@ -8,12 +8,16 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 )
 
 var DB *gorm.DB
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("ℹ️ File .env tidak ditemukan, menggunakan variable lingkungan sistem")
+	}
 	// Inisialisasi Database dari package database
 	db := database.InitDB()
 
@@ -56,5 +60,6 @@ func main() {
 	api.Patch("tasks/:id/complete", taskHandler.CompleteTask)
 
 	// Jalankan Server
-	app.Listen(":3000")
+	log.Println("🏃 Service START berjalan lancar di port :3001")
+	app.Listen(":3001")
 }

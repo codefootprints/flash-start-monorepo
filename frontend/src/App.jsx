@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import "./App.css";
+
+// URL Terpusat Menuju API Gateway (Tasl 11.2)
+const GATEWAY_URL = "http://localhost:8000/api/v1"
+const GATEWAY_WS = "ws://localhost:8000/api/v1/flash/ws/notifications"
 
 const SelectCustom = ({ label, value, onChange, options, placeholder, required = false }) => {
 	return (
@@ -48,428 +51,299 @@ const AccordionSection = ({ title, children, defaultOpen = false }) => {
 };
 
 function App() {
-	// State untuk aset
-	const [resources, setResources] = useState([]);
-	const [resourceFormData, setResourceFormData] = useState({
-		name: "",
-		category: "",
-	});
+	// --- STATE CORE GLOBAL ---
+	const [currentView, setCurrentView] = useState("billing") // "billing" atau "assets" (Task 11.1)
+	const [token, setToken] = useState(localStorage.getItem("token") || "")
+	const [notification, setNotification] = useState({ message: "", type: "" })
+	
+	// --- STATE UNTUK FLOW UTAMA START (ASSETS) ---
+	const [assets, setAssets] = useState([])
+	const [authForm, setAuthForm] = useState({ username: "", password: "" })
+	const [isRegistering, setIsRegistering] = useState(false)
 
-	// State untuk user
-	const [users, setUsers] = useState([]);
-	const [userFormData, setUserFormData] = useState({
-		username: "",
-		email: "",
-	});
-
-  // State untuk tasks
-  const [tasks, setTasks] = useState([])
-
-  const [taskHistory, setTaskHistory] = useState([])
-
-	// State untuk notifikasi
-	const [notification, setNotification] = useState({
-		message: "",
-		type: "",
-	});
+	// --- STATE UNTUK FLOW UTAMA FLASH (BILLING) ---
+	const [transactions, setTransactions] = useState([])
+	const [expandedTxId, setExpandedTxId] = useState(null)
 
 	const showNotification = (message, type = "success") => {
-		setNotification({ message, type });
-		setTimeout(() => setNotification({ message: "", type: "" }), 3000);
-	};
+		setNotification({ message, type })
+		setTimeout(() => {
+			setNotification({ message: "", type: "" })
+		}, 4000);
+	}
 
-	const [assignment, setAssignment] = useState({
-		user_id: "",
-		resource_id: "",
-		title: "",
-	});
+	// --- EFFECT 1: LIVE STREAM WEBSOCKET VIA GATEWAY ---
+	useEffect(() => {
+		const ws = new WebSocket(GATEWAY_WS)
 
-	// Mengambil data dari backend Golang
-	const fetchUsers = () => {
-		fetch("http://localhost:3000/api/users")
-			.then((res) => res.json())
-			.then((data) => setUsers(data))
-			.catch((err) => console.error("Gagal mengambil data", err));
-	};
-
-	const fetchResources = () => {
-		fetch("http://localhost:3000/api/resources")
-			.then((res) => res.json())
-			.then((data) => setResources(data))
-			.catch((err) => console.error("Gagal mengambil data", err));
-	};
-
-  const fetchTasks = () => {
-    fetch("http://localhost:3000/api/tasks")
-      .then((res) => res.json())
-      .then((data) => setTasks(data))
-      .catch((err) => console.error("Gagal mengambil data task", err))
-  }
-
-  const fetchTaskHistory = () => {
-    fetch("http://localhost:3000/api/tasks/history")
-      .then(res => res.json())
-      .then(data => setTaskHistory(data))
-      .catch(err => console.error("Gagal mengambil riwayat", err))
-  }
-
-	const handleUserSubmit = (e) => {
-		e.preventDefault();
-		fetch("http://localhost:3000/api/users", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(userFormData),
-		})
-			.then((res) => res.json())
-			.then(() => {
-				// Reset form
-				setUserFormData({
-					username: "",
-					email: "",
-				});
-				fetchUsers();
-				showNotification("User berhasil ditambahkan!");
-			})
-			.catch((err) => {
-				console.error("Gagal menambah user:", err);
-				showNotification("Gagal menambah user", "error");
-			});
-	};
-
-	const handleResourceSubmit = (e) => {
-		e.preventDefault();
-		fetch("http://localhost:3000/api/resources", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(resourceFormData),
-		})
-			.then(async (res) => {
-				const data = await res.json()
-				if (!res.ok) {
-					throw new Error(data.error || "Gagal menambah aset")
-				}
-				return data
-			})
-			.then(() => {
-				// Reset form
-				setResourceFormData({
-					name: "",
-					category: "",
-				});
-				// Refresh list tabel
-				fetchResources();
-				showNotification("Aset berhasil ditambahkan!");
-			})
-			.catch((err) => {
-				showNotification("Gagal menambah aset", "error");
-			});
-	};
-
-	const handleResourceDelete = (id, name) => {
-		if (window.confirm(`Apakah Anda yakin ingin menghapus aset ini?\n${name}`)) {
-			fetch(`http://localhost:3000/api/resources/${id}`, {
-				method: "DELETE",
-			})
-				.then(async res => {
-					const data = await res.json()
-					if (!res.ok) {
-						throw new Error(data.error || "Gagal menghapus aset");
-					}
-					return data
-				})
-				.then(() => {
-					fetchResources();
-					showNotification("Aset berhasil dihapus")
-				})
-				.catch(err => {
-					showNotification(err.message, "error")
-				});
+		ws.onopen = () => {
+			console.log("🔌 Connected to Consolidated API Gateway WS Proxy")
+			showNotification("Koneksi Live Stram FLASH Aktif via Gateway!")
 		}
-	};
 
-	const handleAssign = (e) => {
-		e.preventDefault();
-		fetch("http://localhost:3000/api/tasks", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				user_id: parseInt(assignment.user_id),
-				resource_id: parseInt(assignment.resource_id),
-				title: assignment.title,
-				description: "Penugasan otomatis dari dashboard",
-			}),
+		ws.onmessage = (event) => {
+			const data = JSON.parse(event.data)
+			if (data.event === "NEW_TRANSACTION") {
+				const newTx = JSON.parse(data.payload)
+				setTransactions(prev => [newTx, ...prev])
+				showNotification(`🎯 Transaksi Baru: ${newTx.invoice_number} - Rp ${newTx.total_amount.toLocaleString("id-ID")}`, "info")
+			}
+		}
+		return () => ws.close()
+	}, [])
+
+	// --- EFFECT 2: FETCH DATA HISTORI BILLING ---
+	useEffect(() => {
+		fetch(`${GATEWAY_URL}/flash/api/transactions`)
+		.then(res => res.json())
+		.then(data => {
+			if (Array.isArray(data)) setTransactions(data)
 		})
-			.then((res) => res.json())
-			.then((data) => {
-				if (data.error) {
-					console.error("Gagal menambah task:", data.error);
-				} else {
-					fetchResources();
-          fetchTasks();
-					setAssignment({
-						user_id: "",
-						resource_id: "",
-						title: "",
-					});
-					showNotification("Penugasan berhasil dibuat!");
-				}
-			});
-	};
+		.catch(err => console.error("Gagal memuat history transaksi:", err))
+	})
 
-  const handleTaskComplete = (id) => {
-    fetch(`http://localhost:3000/api/tasks/${id}/complete`, {
-      method: "PATCH",
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.error) {
-          showNotification(data.error, "error")
-        } else {
-          fetchResources()
-          fetchTasks()
-          fetchTaskHistory()
-          showNotification("Aset berhasil dikembalikan!")
-        }
-      })
-      .catch(err => {
-        console.error("Gagal mengembalikan aset:", err)
-        showNotification("Gagal mengembalikan aset", "error")
-      })
-  }
+	// --- EFFECT 3: FETCH DATA ASET (DIPROTEKSI JWT GATEWAY) ---
+	const fetchAssets = () => {
+		if (!token) return
+		fetch(`${GATEWAY_URL}/start/assets`, {
+			headers: { "Authorization": `Bearer ${token}` }
+		})
+			.then(res => {
+				if (res.status === 401) throw new Error("Sesi kedaluwarsa")
+					return res.json()
+			})
+			.then(data => {
+				if (Array.isArray(data)) setAssets(data)
+			})
+		.catch(err => {
+			handleLogout()
+			showNotification("Sesi login habis, silakan masuk kembali", "error")
+		})
+	}
 
 	useEffect(() => {
-		fetchResources()
-    fetchTasks()
-		fetchUsers()
-    fetchTaskHistory()
-	}, []);
+		if (token && currentView === "assets") fetchAssets()
+	}, [token, currentView])
+
+	// --- HANDLER AUTENTIKASI (START SERVICE VIA GATEWAY) ---
+	const handleAuthSubmit = (e) => {
+		e.preventDefault()
+		const endpoint = isRegistering ? "register" : "login"
+
+		fetch(`${GATEWAY_URL}/start/${endpoint}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(authForm)
+		})
+			.then(res => res.json())
+			.then(data => {
+				if (data.token) {
+					localStorage.setItem("token", data.token)
+					setToken(data.token)
+					showNotification("Selamat datang kembali! Autentikasi sukses")
+					setAuthForm({ username: "", password: "" })
+				} else if (isRegistering) {
+					showNotification("Registrasi berhasil, silakan masuk!")
+					setIsRegistering(false)
+				} else {
+					showNotification(data.error || "Gagal memproses autentikasi", "error")
+				}
+			})
+			.catch(() => showNotification("Gagal menghubungi Security Gate Gateway", "error"))
+	}
+
+	const handleLogout = () => {
+		localStorage.removeItem("token")
+		setToken("")
+		setAssets([])
+	}
 
 	return (
-		<>
-			{notification.message && (
-				<div className={`fixed top-5 right-5 px-6 py-3 rounded-lg shadow-lg border transition-all duration-500 ${notification.type === "success" ? "bg-white border-olive-500 text-olive-500" : "bg-red-50 border-red-500 text-red-600"} z-50`}>
-					<p className="font-medium text-sm">{notification.message}</p>
-				</div>
-			)}
+    <div className="flex min-h-screen bg-stone-100 font-sans">
+      {/* Toast Notification Banner */}
+      {notification.message && (
+        <div className={`fixed top-5 right-5 px-6 py-3 rounded-xl shadow-md border transition-all duration-500 ${notification.type === "success" ? "bg-white border-green-500 text-green-600" : notification.type === "info" ? "bg-olive-50 border-olive-600 text-olive-900" : "bg-red-50 border-red-400 text-red-600"} z-50`}>
+          <p className="font-semibold text-xs tracking-wide">{notification.message}</p>
+        </div>
+      )}
 
-			<div className="min-h-screen bg-stone-50 p-8">
-				<div className="max-w-4xl mx-auto">
-					<header className="flex justify-between items-center mb-8">
-						<h1 className="text-3xl font-bold text-stone-800">START Dashboard</h1>
-						<div className="px-4 py-1 bg-olive-100 text-olive-800 rounded-full text-sm font-medium border border-olive-800">{resources.length} Resource Terdata</div>
-					</header>
+      {/* 🧭 NAVIGATION SIDEBAR PANEL (Task 11.1) */}
+      <aside className="w-64 bg-stone-900 text-stone-200 flex flex-col border-r border-stone-800">
+        <div className="p-6 border-b border-stone-800">
+          <h2 className="text-xl font-black tracking-wider text-white">MONOREPO OS</h2>
+          <p className="text-stone-500 text-xs italic mt-0.5">Consolidated Enterprise Hub</p>
+        </div>
 
-					{/* Form Tambah User */}
-					<AccordionSection title="Registrasi Anggota Tim">
-						<form onSubmit={handleUserSubmit} className="flex gap-4 flex-wrap">
-							<input
-								type="text"
-								placeholder="Username"
-								className="flex-1 p-2 border border-stone-300 rounded focus:outline-none focus:ring-2 focus:ring-olive-500"
-								value={userFormData.username}
-								onChange={(e) =>
-									setUserFormData({
-										...userFormData,
-										username: e.target.value,
-									})
-								}
-								required
-							/>
-							<input
-								type="email"
-								placeholder="Email"
-								className="flex-1 p-2 border border-stone-300 rounded focus:outline-none focus:ring-2 focus:ring-olive-500"
-								value={userFormData.email}
-								onChange={(e) =>
-									setUserFormData({
-										...userFormData,
-										email: e.target.value,
-									})
-								}
-								required
-							/>
-							<button type="submit" className="px-6 py-2 bg-olive-800 text-white rounded hover:bg-olive-500 font-medium">
-								Tambah User
-							</button>
-						</form>
-					</AccordionSection>
+        <nav className="flex-1 p-4 space-y-1.5">
+          <button onClick={() => setCurrentView("billing")} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${currentView === "billing" ? "bg-olive-800 text-white font-bold" : "hover:bg-stone-800 text-stone-400"}`}>
+            <span>⚡ FLASH Billing Feed</span>
+          </button>
+          <button onClick={() => setCurrentView("assets")} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${currentView === "assets" ? "bg-olive-800 text-white font-bold" : "hover:bg-stone-800 text-stone-400"}`}>
+            <span>📦 START Asset Depot</span>
+          </button>
+        </nav>
 
-					{/* Form Tambah Aset */}
-					<AccordionSection title="Tambah Aset Baru">
-						<form onSubmit={handleResourceSubmit} className="flex gap-4 flex-wrap">
-							<input 
-                type="text" 
-                placeholder="Nama Aset (Contoh: Macbook Air)" 
-                className="flex-1 p-2 border border-stone-300 rounded focus:outline-none focus:ring-2 focus:ring-olive-500" 
-                value={resourceFormData.name} 
-                onChange={(e) => setResourceFormData({ ...resourceFormData, name: e.target.value })} 
-                required 
-              />
-							<input 
-                type="text" 
-                placeholder="Kategori" 
-                className="flex-1 p-2 border border-stone-300 rounded focus:outline-none focus:ring-2 focus:ring-olive-500" 
-                value={resourceFormData.category} 
-                onChange={(e) => setResourceFormData({ ...resourceFormData, category: e.target.value })} 
-                required 
-              />
-							<button type="submit" className="px-6 py-2 bg-olive-800 text-white rounded hover:bg-olive-500 font-medium">
-								Tambah Aset
-							</button>
-						</form>
-					</AccordionSection>
+        {token && (
+          <div className="p-4 border-t border-stone-800 bg-stone-950/40">
+            <button onClick={handleLogout} className="w-full text-left px-4 py-2 text-xs font-semibold text-red-400 hover:text-red-300 transition-colors">
+              ➔ Keluar Sistem
+            </button>
+          </div>
+        )}
+      </aside>
 
-					{/* Form Assignment */}
-					<AccordionSection title="Assign Resource">
-						<form onSubmit={handleAssign} className="grid grid-cols-1 md:grid-cols-4 gap-4">
-							<input
-								type="text"
-								placeholder="Judul Tugas"
-								className="p-2 border border-stone-300 rounded"
-								value={assignment.title}
-								onChange={(e) =>
-									setAssignment({
-										...assignment,
-										title: e.target.value,
-									})
-								}
-								required
-							/>
-							<SelectCustom 
-                placeholder="Pilih User" 
-                value={assignment.user_id} 
-                options={users} 
-                onChange={(e) => setAssignment({ ...assignment, user_id: e.target.value })} 
-                required 
-              />
-							<SelectCustom 
-                placeholder="Pilih Aset" 
-                value={assignment.resource_id} 
-                options={resources.filter((r) => r.status === "available")} 
-                onChange={(e) => setAssignment({ ...assignment, resource_id: e.target.value })} 
-                required 
-              />
-							<button type="submit" className="px-6 py-2 bg-olive-800 text-white rounded hover:bg-olive-500 font-medium">
-								Assign
-							</button>
-						</form>
-					</AccordionSection>
+      {/* MAIN VIEW CONTROLLER WORKSPACE */}
+      <main className="flex-1 p-10 overflow-y-auto">
+        {/* VIEW A: FLASH LIVE BILLING FEED */}
+        {currentView === "billing" && (
+          <div className="max-w-4xl mx-auto">
+            <header className="flex justify-between items-center mb-8 pb-5 border-b border-stone-200">
+              <div>
+                <h1 className="text-2xl font-black text-stone-800">FLASH Engine</h1>
+                <p className="text-stone-500 text-xs italic mt-0.5">Asynchronous Signal Telemetry Stream</p>
+              </div>
+              <div className="px-4 py-1 bg-olive-100 text-olive-800 rounded-full text-xs font-bold border border-olive-700 animate-pulse">🔴 GATEWAY TUNNEL LIVE</div>
+            </header>
 
-					{/* Tabel Resource */}
-					<AccordionSection title="Daftar Resource" defaultOpen={true}>
-						<div className="overflow-x-auto">
-							<table className="w-full text-left">
-								<thead className="bg-stone-100 border-b border-stone-200">
-									<tr>
-										<th className="px-6 py-4 text-sm font-semibold text-stone-600">Nama Aset</th>
-										<th className="px-6 py-4 text-sm font-semibold text-stone-600">Kategori</th>
-										<th className="px-6 py-4 text-sm font-semibold text-stone-600">Status</th>
-										<th className="px-6 text-sm font-semibold text-stone-600 text-center">Aksi</th>
-									</tr>
-								</thead>
-								<tbody className="divide-y divide-stone-100">
-									{resources.map((item) => (
-										<tr className="hover:bg-stone-50 transition-colors" key={item.id}>
-											<td className="px-6 py-4 text-stone-800 font-medium">{item.name}</td>
-											<td className="px-6 py-4 text-stone-500">{item.category}</td>
-											<td className="px-6 py-4">
-												<span className={`px-3 py-1 rounded-full text-xs font-medium ${item.status === "available" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{item.status}</span>
-											</td>
-											<td className="px-6 py-4 text-center">
-												<button onClick={() => handleResourceDelete(item.id, item.name)} className="text-red-600 hover:text-white hover:bg-red-600 font-medium text-sm rounded px-2 py-1 hover:cursor-pointer">
-													Hapus
-												</button>
-											</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						</div>
-					</AccordionSection>
-
-          {/* Tabel Task / Peminjaman Aktif */}
-          <AccordionSection title="Daftar Peminjaman Aktif" defaultOpen={true}>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-stone-100 border-b border-stone-200">
-                  <tr>
-                    <th className="px-6 py-4 text-sm font-semibold text-stone-600">User</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-stone-600">Aset</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-stone-600">Judul Tugas</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-stone-600">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {tasks.length > 0 ? (
-                    tasks.map(task => (
-                      <tr className="hover:bg-stone-50 transition-colors" key={task.id}>
-                        <td className="px-6 py-4 text-stone-800">{task.user?.username || "N/A"}</td>
-                        <td className="px-6 py-4 text-stone-800 font-medium">{task.resource?.name || "N/A"}</td>
-                        <td className="px-6 py-4 text-stone-800 italic">{task.title}</td>
-                        <td className="px-6 py-4 text-center">
-                          <button
-                            onClick={() => handleTaskComplete(task.id)}
-                            className="border border-olive-500 text-olive-800 hover:bg-olive-500 hover:text-white font-medium text-sm rounded px-3 py-1 transition-all hover:cursor-pointer focus:outline-none focus:ring-2 focus:ring-olive-500"
-                          >
-                            Kembalikan
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
+            <AccordionSection title="Live Transaction Logs" defaultOpen={true}>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left table-fixed">
+                  <thead className="bg-stone-50 border-b border-stone-200">
                     <tr>
-                      <td colSpan="4" className="px-4 py-8 text-center text-stone-400">
-                        Tidak ada peminjaman aktif
-                      </td>
+                      <th className="w-1/12 px-4 py-3.5 text-xs font-bold text-stone-500 text-center"></th>
+                      <th className="w-3/12 px-4 py-3.5 text-xs font-bold text-stone-500">Invoice</th>
+                      <th className="w-3/12 px-4 py-3.5 text-xs font-bold text-stone-500">Operator</th>
+                      <th className="w-3/12 px-4 py-3.5 text-xs font-bold text-stone-500">Total</th>
+                      <th className="w-2/12 px-4 py-3.5 text-xs font-bold text-stone-500 text-right">Timestamp</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </AccordionSection>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {transactions.length > 0 ? (
+                      transactions.map((tx) => (
+                        <tr key={tx.id} className="p-0">
+                          <td colSpan="5" className="p-0">
+                            <div onClick={() => setExpandedTxId(expandedTxId === tx.id ? null : tx.id)} className="flex items-center w-full cursor-pointer py-4 hover:bg-stone-50 transition-colors">
+                              <div className="w-1/12 text-center flex justify-center">
+                                <svg className={`w-3.5 h-3.5 text-stone-400 transition-transform duration-300 ${expandedTxId === tx.id ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </div>
+                              <div className="w-3/12 px-4 text-olive-800 font-bold tracking-wider text-sm">{tx.invoice_number}</div>
+                              <div className="w-3/12 px-4 text-stone-600 font-medium text-sm">{tx.cashier_name}</div>
+                              <div className="w-3/12 px-4 text-stone-900 font-bold text-sm">Rp {tx.total_amount.toLocaleString("id-ID")}</div>
+                              <div className="w-2/12 px-4 text-right text-stone-400 text-xs italic">{new Date(tx.created_at).toLocaleTimeString("id-ID")}</div>
+                            </div>
 
-          <AccordionSection title="Riwayat Pengembalian" defaultOpen={true}>
-            <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                    <thead className="bg-stone-100 border-b border-stone-200">
-                        <tr>
-                            <th className="px-6 py-4 text-sm font-semibold text-stone-600">User</th>
-                            <th className="px-6 py-4 text-sm font-semibold text-stone-600">Aset</th>
-                            <th className="px-6 py-4 text-sm font-semibold text-stone-600">Selesai Pada</th>
+                            {/* Collapsible Details */}
+                            <div className={`overflow-hidden transition-all duration-300 bg-stone-50/50 ${expandedTxId === tx.id ? "max-h-[500px] p-4 border-t border-b border-stone-100" : "max-h-0"}`}>
+                              <div className="bg-white rounded-lg border border-stone-200 overflow-hidden shadow-2xs">
+                                <table className="w-full text-xs text-left">
+                                  <thead className="bg-stone-50 border-b border-stone-100">
+                                    <tr>
+                                      <th className="px-4 py-2 font-bold text-stone-500">Nama Barang</th>
+                                      <th className="px-4 py-2 font-bold text-stone-500 text-center">Qty</th>
+                                      <th className="px-4 py-2 font-bold text-stone-500 text-right">Subtotal</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-stone-100">
+                                    {tx.orders?.map((item) => (
+                                      <tr key={item.id}>
+                                        <td className="px-4 py-2.5 font-medium text-stone-700">{item.product?.name || `Product ID ${item.product_id}`}</td>
+                                        <td className="px-4 py-2.5 text-center font-bold text-stone-600">{item.quantity}x</td>
+                                        <td className="px-4 py-2.5 text-right font-bold text-stone-800">Rp {item.sub_total.toLocaleString("id-ID")}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </td>
                         </tr>
-                    </thead>
-                    <tbody className="divide-y divide-stone-100">
-                        {taskHistory.length > 0 ? (
-                            taskHistory.map((history) => (
-                                <tr className="bg-stone-50/30" key={history.id}>
-                                    <td className="px-6 py-4 text-stone-600">{history.user?.username || "N/A"}</td>
-                                    <td className="px-6 py-4 text-stone-600 font-medium">{history.resource?.name || "N/A"}</td>
-                                    <td className="px-6 py-4 text-stone-400 text-xs italic">
-                                        {new Date(history.updated_at).toLocaleString("id-ID")}
-                                    </td>
-                                </tr>
-                            ))
-                        ) : (
-                            <tr>
-                                <td colSpan="3" className="px-6 py-8 text-center text-stone-400">
-                                    Belum ada riwayat pengembalian
-                                </td>
-                            </tr>
-                        )}
-                    </tbody>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="5" className="px-4 py-8 text-center text-stone-400 text-xs italic">Menunggu pancaran data dari gateway...</td>
+                      </tr>
+                    )}
+                  </tbody>
                 </table>
-            </div>
-          </AccordionSection>
-				</div>
-			</div>
-		</>
-	);
+              </div>
+            </AccordionSection>
+          </div>
+        )}
+
+        {/* VIEW B: START ASSET DEPOT (PROTECTED REGION) */}
+        {currentView === "assets" && (
+          <div className="max-w-4xl mx-auto">
+            <header className="flex justify-between items-center mb-8 pb-5 border-b border-stone-200">
+              <div>
+                <h1 className="text-2xl font-black text-stone-800">START Depot</h1>
+                <p className="text-stone-500 text-xs italic mt-0.5">Corporate Inventory Vault & Protection Area</p>
+              </div>
+            </header>
+
+            {!token ? (
+              /* Auth Form Box */
+              <div className="max-w-md mx-auto bg-white rounded-2xl border border-stone-200 shadow-xs p-8 mt-10">
+                <h3 className="text-lg font-bold text-stone-800 mb-1">{isRegistering ? "Buat Akun Terpusat" : "Proteksi Security Gate"}</h3>
+                <p className="text-stone-400 text-xs mb-6">Silakan autentikasi kredensial Anda untuk membuka proxy rute internal database aset.</p>
+                <form onSubmit={handleAuthSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">Username</label>
+                    <input type="text" required value={authForm.username} onChange={(e) => setAuthForm({...authForm, username: e.target.value})} className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-stone-400 transition-colors" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">Password</label>
+                    <input type="password" required value={authForm.password} onChange={(e) => setAuthForm({...authForm, password: e.target.value})} className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-stone-400 transition-colors" />
+                  </div>
+                  <button type="submit" className="w-full bg-stone-900 text-white text-sm font-bold py-3.5 rounded-xl hover:bg-stone-800 transition-colors shadow-xs">
+                    {isRegistering ? "Daftar Akun Baru" : "Buka Kunci Akses"}
+                  </button>
+                </form>
+                <button onClick={() => setIsRegistering(!isRegistering)} className="w-full text-center text-xs text-stone-400 font-medium mt-4 hover:underline">
+                  {isRegistering ? "Sudah punya akun? Login di sini" : "Belum terdaftar? Buat akun korporat baru"}
+                </button>
+              </div>
+            ) : (
+              /* Secured Asset Table View */
+              <div className="bg-white rounded-2xl border border-stone-200 shadow-2xs p-6">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="font-bold text-stone-800 text-lg">Daftar Logistik Aset Perusahaan</h3>
+                  <span className="px-3 py-1 bg-green-50 text-green-700 text-[10px] font-black rounded-md uppercase tracking-wider border border-green-200">🛡️ JWT Verified Guarded</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-stone-50 border-b border-stone-200 text-stone-500 text-xs font-bold">
+                      <tr>
+                        <th className="px-4 py-3">Nama Aset</th>
+                        <th className="px-4 py-3">Kategori</th>
+                        <th className="px-4 py-3 text-center">Kuantitas</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100 text-sm text-stone-600 font-medium">
+                      {assets.length > 0 ? (
+                        assets.map((asset) => (
+                          <tr key={asset.id} className="hover:bg-stone-50/40 transition-colors">
+                            <td className="px-4 py-3.5 text-stone-900 font-bold">{asset.name}</td>
+                            <td className="px-4 py-3.5"><span className="px-2 py-0.5 bg-stone-100 border border-stone-200 text-stone-500 rounded text-xs">{asset.category}</span></td>
+                            <td className="px-4 py-3.5 text-center font-bold text-stone-800">{asset.quantity} unit</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="3" className="px-4 py-8 text-center text-stone-400 text-xs italic">Data logistik kosong atau Anda belum menambahkan aset apa pun.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+	)
 }
 
 export default App;
